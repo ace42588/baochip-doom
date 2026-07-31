@@ -1,0 +1,13 @@
+build/
+*.o
+*.elf
+*.bin
+*.uf2
+*.map
+.DS_Store
+# Local toolchain copies (keep out of git)
+third_party/dabao-sdk/xpack-riscv-none-elf-gcc-*/
+# Do not redistribute commercial IWADs
+assets/*.wad
+assets/*.WAD
+!assets/README.md
