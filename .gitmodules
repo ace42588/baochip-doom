@@ -1,0 +1,6 @@
+[submodule "third_party/dabao-sdk"]
+	path = third_party/dabao-sdk
+	url = https://github.com/bunnie/dabao-sdk.git
+[submodule "third_party/doomgeneric"]
+	path = third_party/doomgeneric
+	url = https://github.com/ozkl/doomgeneric.git
