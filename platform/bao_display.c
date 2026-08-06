@@ -1,9 +1,14 @@
 /*
- * OLED present path for Baochip / DC34 badge.
+ * OLED presentation path for Baochip / DC34 badge.
  *
- * Preferred: SSD1327 I²C square grayscale (128×128 or 96×96), addr 0x3C/0x3D.
- * Fallback:  SH1107 / SSD1306 1-bit with Bayer dither.
- * Optional:  SPI SH1107 (baosec-like) when BAO_OLED_SPI is defined.
+ * DC34 badge (BOARD_OLED_SPI_ONLY): CH112OL001A module, SH1107-class,
+ *   128x128 1-bit, 4-wire SPI on SPIM2 (PC0 SCK / PC1 MOSI / PC2 C/D /
+ *   PC3 CSN0), VOLED boost enabled by PC4. Init sequence and data layout
+ *   mirror the stock firmware driver (xous-core bao1x-hal sh1107.rs).
+ *
+ * Dabao dev board: I2C breakout probing (SSD1327 4-bit grayscale preferred,
+ *   SH1107/SSD1306 1-bit fallback), or the SPI path when built with
+ *   BAO_OLED_SPI.
  */
 
 #include <stdint.h>
@@ -17,6 +22,10 @@
 #include "hardware/spi.h"
 #include "hardware/gpio.h"
 
+#ifndef BOARD_OLED_I2C_ADDR
+#define BOARD_OLED_I2C_ADDR 0x3C
+#endif
+
 #ifndef BOARD_OLED_I2C_ADDR_ALT
 #define BOARD_OLED_I2C_ADDR_ALT 0x3D
 #endif
@@ -25,19 +34,22 @@
 #define BOARD_OLED_PREFER_SSD1327 1
 #endif
 
+#ifndef BOARD_OLED_SPI_CLKDIV
+#define BOARD_OLED_SPI_CLKDIV 24
+#endif
+
 #define FB_W BOARD_OLED_WIDTH
 #define FB_H BOARD_OLED_HEIGHT
 
 /* SSD1327: 4 bpp, 2 pixels/byte. Max 128×128 → 8 KiB. */
 #define GRAY4_BYTES ((FB_W * FB_H) / 2)
-/* 1-bit page buffer for SH1107/SSD1306 */
+/* 1-bit buffer for SH1107/SSD1306 */
 #define MONO_BYTES  ((FB_W * FB_H) / 8)
 
 static bao_display_backend_t g_backend = BAO_DISPLAY_NONE;
 static uint8_t g_i2c_addr = BOARD_OLED_I2C_ADDR;
 static uint8_t g_fb[GRAY4_BYTES > MONO_BYTES ? GRAY4_BYTES : MONO_BYTES];
 static uint8_t g_i2c_buf[129] __attribute__((section(".dma_buffers"), aligned(4)));
-static uint8_t g_spi_buf[FB_W] __attribute__((section(".dma_buffers"), aligned(4)));
 
 static const uint8_t bayer4[4][4] = {
     { 0,  8,  2, 10 },
@@ -45,6 +57,10 @@ static const uint8_t bayer4[4][4] = {
     { 3, 11,  1,  9 },
     { 15, 7, 13,  5 },
 };
+
+/* ------------------------------------------------------------------ */
+/* I2C panels (Dabao dev-board breakouts)                              */
+/* ------------------------------------------------------------------ */
 
 static int i2c_cmd(uint8_t cmd)
 {
@@ -140,44 +156,93 @@ static bool init_sh1107_i2c(void)
     return true;
 }
 
-static void spi_cmd(uint8_t cmd)
+/* ------------------------------------------------------------------ */
+/* SPI SH1107 (DC34 badge panel, baosec wiring)                        */
+/* ------------------------------------------------------------------ */
+
+static void spi_cmds(const uint8_t *cmds, uint32_t len)
 {
     gpio_put(BOARD_OLED_SPI_CD_PORT, BOARD_OLED_SPI_CD_PIN, false);
-    spi_write_blocking(BOARD_OLED_SPI, &cmd, 1, 9);
+    spi_write_blocking(BOARD_OLED_SPI, cmds, len, BOARD_OLED_SPI_CLKDIV);
 }
 
 static void spi_data(const uint8_t *data, uint32_t len)
 {
     gpio_put(BOARD_OLED_SPI_CD_PORT, BOARD_OLED_SPI_CD_PIN, true);
     while (len) {
-        uint32_t n = len > FB_W ? FB_W : len;
-        memcpy(g_spi_buf, data, n);
-        spi_write_blocking(BOARD_OLED_SPI, g_spi_buf, n, 9);
+        uint32_t n = len > 256 ? 256 : len;
+        spi_write_blocking(BOARD_OLED_SPI, data, n, BOARD_OLED_SPI_CLKDIV);
         data += n;
         len -= n;
     }
 }
 
+/* Address one panel column: page 0, column n (data then auto-increments
+ * through the 16 pages of the column). */
+static void spi_set_column(uint8_t n)
+{
+    uint8_t cmds[3] = {
+        0xB0,                                /* page address 0 */
+        (uint8_t)(n & 0x0F),                 /* column address low nibble */
+        (uint8_t)(0x10 | ((n >> 4) & 0x07)), /* column address high nibble */
+    };
+    spi_cmds(cmds, 3);
+}
+
 static bool init_spi_sh1107(void)
 {
-    spi_init(BOARD_OLED_SPI);
-    gpio_init(BOARD_OLED_SPI_CD_PORT, BOARD_OLED_SPI_CD_PIN);
-    gpio_set_dir(BOARD_OLED_SPI_CD_PORT, BOARD_OLED_SPI_CD_PIN, true);
+    /* Init sequence from the stock DC34/baosec driver
+     * (xous-core bao1x-hal sh1107.rs), with normal instead of inverted
+     * display mode: we write 1 = lit. */
+    static const uint8_t seq[] = {
+        0xAE,       /* display off */
+        0xAD, 0x80, /* DC-DC control: external VOLED (MT3608 boost) */
+        0xDC, 0x00, /* start line 0 */
+        0xD3, 0x00, /* display offset 0 */
+        0x81, 0x3F, /* contrast */
+        0x21,       /* vertical (column) addressing mode */
+        0xA0,       /* segment remap off */
+        0xC8,       /* COM scan direction inverted */
+        0xA8, 0x7F, /* multiplex ratio 128 */
+        0xD5, 0x60, /* clock divider 1, osc freq +5% */
+        0xD9, 0x22, /* pre-charge/discharge periods */
+        0xDB, 0x35, /* VCOMH deselect level */
+        0xB0,       /* page address 0 */
+        0xA4,       /* follow RAM */
+        0xA6,       /* normal (non-inverted) display */
+    };
 
-    spi_cmd(0xAE);
-    spi_cmd(0xD5); spi_cmd(0x50);
-    spi_cmd(0xA8); spi_cmd((uint8_t)(FB_H - 1));
-    spi_cmd(0xD3); spi_cmd(0x00);
-    spi_cmd(0x40);
-    spi_cmd(0xA1);
-    spi_cmd(0xC8);
-    spi_cmd(0xDA); spi_cmd(0x12);
-    spi_cmd(0x81); spi_cmd(0x80);
-    spi_cmd(0xD9); spi_cmd(0x22);
-    spi_cmd(0xDB); spi_cmd(0x35);
-    spi_cmd(0xA4);
-    spi_cmd(0xA6);
-    spi_cmd(0xAF);
+    spi_init(BOARD_OLED_SPI);
+
+    /* spi_init() muxes PC2 as MISO with a pull-up; on this wiring PC2 is
+     * the panel's C/D line, and CS is the hardware CSN0 on PC3. */
+    gpio_init(BOARD_OLED_SPI_CD_PORT, BOARD_OLED_SPI_CD_PIN);
+    gpio_disable_pulls(BOARD_OLED_SPI_CD_PORT, BOARD_OLED_SPI_CD_PIN);
+    gpio_set_dir(BOARD_OLED_SPI_CD_PORT, BOARD_OLED_SPI_CD_PIN, true);
+    gpio_put(BOARD_OLED_SPI_CD_PORT, BOARD_OLED_SPI_CD_PIN, false);
+    gpio_set_function(BOARD_OLED_SPI_CS_PORT, BOARD_OLED_SPI_CS_PIN, GPIO_FUNC_AF2);
+    gpio_set_dir(BOARD_OLED_SPI_CS_PORT, BOARD_OLED_SPI_CS_PIN, true);
+
+#if defined(BOARD_OLED_PON_PORT)
+    /* Enable the VOLED boost converter and let it stabilize. The panel's
+     * reset pin rides the TRST_PRST net (RC pull), no GPIO involved. */
+    gpio_init(BOARD_OLED_PON_PORT, BOARD_OLED_PON_PIN);
+    gpio_set_dir(BOARD_OLED_PON_PORT, BOARD_OLED_PON_PIN, true);
+    gpio_put(BOARD_OLED_PON_PORT, BOARD_OLED_PON_PIN, true);
+    delay_ms(20);
+#endif
+
+    spi_cmds(seq, sizeof(seq));
+
+    /* Clear GDDRAM before turning the display on */
+    memset(g_fb, 0, MONO_BYTES);
+    for (int col = 0; col < FB_H; col++) {
+        spi_set_column((uint8_t)col);
+        spi_data(&g_fb[col * (FB_W / 8)], FB_W / 8);
+    }
+
+    uint8_t on = 0xAF;
+    spi_cmds(&on, 1);
 
     g_backend = BAO_DISPLAY_SPI_SH1107;
     return true;
@@ -198,13 +263,14 @@ bool bao_display_init(void)
 {
     memset(g_fb, 0, sizeof(g_fb));
 
-#if defined(BAO_OLED_SPI)
+#if defined(BAO_OLED_SPI) || BOARD_OLED_SPI_ONLY
     if (init_spi_sh1107()) {
         mini_printf("OLED: %s %dx%d\r\n", backend_name(g_backend), FB_W, FB_H);
         return true;
     }
 #endif
 
+#if !BOARD_OLED_SPI_ONLY
     i2c_init(BOARD_OLED_I2C, 400000);
 
     if (!i2c_probe_addr(BOARD_OLED_I2C_ADDR) &&
@@ -227,6 +293,7 @@ bool bao_display_init(void)
                     backend_name(g_backend), FB_W, FB_H, g_i2c_addr);
         return true;
     }
+#endif /* !BOARD_OLED_SPI_ONLY */
 
     g_backend = BAO_DISPLAY_NONE;
     mini_printf("OLED: none (headless)\r\n");
@@ -260,20 +327,23 @@ static void flush_ssd1327(void)
 
 static void flush_mono(void)
 {
+    if (g_backend == BAO_DISPLAY_SPI_SH1107) {
+        /* Column-addressed like the stock driver: panel column n carries
+         * framebuffer row n (16 bytes). */
+        for (int col = 0; col < FB_H; col++) {
+            spi_set_column((uint8_t)col);
+            spi_data(&g_fb[col * (FB_W / 8)], FB_W / 8);
+        }
+        return;
+    }
+
     int pages = FB_H / 8;
     for (int p = 0; p < pages; p++) {
         const uint8_t *row = &g_fb[p * FB_W];
-        if (g_backend == BAO_DISPLAY_SPI_SH1107) {
-            spi_cmd((uint8_t)(0xB0 | p));
-            spi_cmd(0x00);
-            spi_cmd(0x10);
-            spi_data(row, FB_W);
-        } else {
-            i2c_cmd((uint8_t)(0xB0 | p));
-            i2c_cmd(0x00);
-            i2c_cmd(0x10);
-            i2c_data(row, FB_W);
-        }
+        i2c_cmd((uint8_t)(0xB0 | p));
+        i2c_cmd(0x00);
+        i2c_cmd(0x10);
+        i2c_data(row, FB_W);
     }
 }
 
@@ -309,7 +379,13 @@ void bao_display_present_gray(const uint8_t *gray, int width, int height)
             uint8_t lum = gray[sy * width + sx];
             uint8_t thr = (uint8_t)(bayer4[oy & 3][ox & 3] * 16);
             if (lum > thr) {
-                g_fb[(oy >> 3) * FB_W + ox] |= (uint8_t)(1u << (oy & 7));
+                if (g_backend == BAO_DISPLAY_SPI_SH1107) {
+                    /* Row-major, LSB = lowest x (stock driver layout) */
+                    g_fb[oy * (FB_W / 8) + (ox >> 3)] |= (uint8_t)(1u << (ox & 7));
+                } else {
+                    /* Page layout for I2C SSD1306/SH1107 */
+                    g_fb[(oy >> 3) * FB_W + ox] |= (uint8_t)(1u << (oy & 7));
+                }
             }
         }
     }

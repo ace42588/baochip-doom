@@ -6,10 +6,10 @@
 
 typedef enum {
     BAO_DISPLAY_NONE = 0,
-    BAO_DISPLAY_I2C_SSD1327,   /* 4-bit grayscale (preferred DC34 candidate) */
-    BAO_DISPLAY_I2C_SH1107,    /* 1-bit mono square OLED */
+    BAO_DISPLAY_I2C_SSD1327,   /* 4-bit grayscale (Dabao dev-board breakout) */
+    BAO_DISPLAY_I2C_SH1107,    /* 1-bit mono square OLED breakout */
     BAO_DISPLAY_I2C_SSD1306,   /* 1-bit mono (taller panels / Dabao breakouts) */
-    BAO_DISPLAY_SPI_SH1107,
+    BAO_DISPLAY_SPI_SH1107,    /* DC34 badge panel (CH112OL001A, 128x128) */
 } bao_display_backend_t;
 
 /* Probe and init OLED. Returns false if none found (headless OK). */

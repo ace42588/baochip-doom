@@ -38,6 +38,8 @@ ifeq ($(WAD_BACKEND),spi)
 endif
 
 # OLED size override (default from board_*.h: 128×128)
+# BOARD=badge is always the fixed 128×128 SPI SH1107; these only apply to
+# I2C breakouts on the Dabao dev board.
 ifdef OLED_W
   CFLAGS += -DBOARD_OLED_WIDTH=$(OLED_W)
 endif
@@ -45,10 +47,13 @@ ifdef OLED_H
   CFLAGS += -DBOARD_OLED_HEIGHT=$(OLED_H)
 endif
 
-# OLED driver: ssd1327 (default) | sh1107
+# Dabao dev-board OLED driver: ssd1327 (default) | sh1107 (I2C) | spi (baosec-style SH1107)
 OLED_DRIVER ?= ssd1327
 ifeq ($(OLED_DRIVER),sh1107)
   CFLAGS += -DBOARD_OLED_PREFER_SSD1327=0
+endif
+ifeq ($(OLED_DRIVER),spi)
+  CFLAGS += -DBAO_OLED_SPI
 endif
 
 INC := \
@@ -146,7 +151,8 @@ all: $(UF2)
 help:
 	@echo "Targets: all clean size flash"
 	@echo "Vars: BOARD=dabao|badge  WAD_BACKEND=embedded|spi"
-	@echo "      OLED_DRIVER=ssd1327|sh1107  OLED_W=128|96  OLED_H=128|96"
+	@echo "      OLED_DRIVER=ssd1327|sh1107|spi  OLED_W=128|96  OLED_H=128|96  (dabao only;"
+	@echo "      badge display is fixed: SPI SH1107 128x128)"
 
 $(BUILD)/crt0.o: $(SDK)/src/runtime/crt0.S
 	@mkdir -p $(BUILD)

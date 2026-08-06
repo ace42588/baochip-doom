@@ -68,43 +68,48 @@ static unsigned char map_uart_char(char c)
 #if BOARD_HAS_KEYPAD
 static void keypad_init(void)
 {
-    gpio_init(BOARD_KB_PORT, BOARD_KB_ROW0);
-    gpio_init(BOARD_KB_PORT, BOARD_KB_ROW1);
-    gpio_set_dir(BOARD_KB_PORT, BOARD_KB_ROW0, true);
-    gpio_set_dir(BOARD_KB_PORT, BOARD_KB_ROW1, true);
-    gpio_put(BOARD_KB_PORT, BOARD_KB_ROW0, true);
-    gpio_put(BOARD_KB_PORT, BOARD_KB_ROW1, true);
+    const uint8_t rows[2] = { BOARD_KB_ROW0, BOARD_KB_ROW1 };
+    const uint8_t cols[3] = { BOARD_KB_COL0, BOARD_KB_COL1, BOARD_KB_COL2 };
 
-    gpio_init(BOARD_KB_PORT, BOARD_KB_COL0);
-    gpio_init(BOARD_KB_PORT, BOARD_KB_COL1);
-    gpio_init(BOARD_KB_PORT, BOARD_KB_COL2);
-    gpio_set_dir(BOARD_KB_PORT, BOARD_KB_COL0, false);
-    gpio_set_dir(BOARD_KB_PORT, BOARD_KB_COL1, false);
-    gpio_set_dir(BOARD_KB_PORT, BOARD_KB_COL2, false);
+    for (int r = 0; r < 2; r++) {
+        gpio_init(BOARD_KB_PORT, rows[r]);
+        gpio_set_dir(BOARD_KB_PORT, rows[r], true);
+        gpio_put(BOARD_KB_PORT, rows[r], true);
+    }
+
+    /* Columns idle high via pull-up; a pressed switch shorts them to the
+     * row being scanned low. */
+    for (int c = 0; c < 3; c++) {
+        gpio_init(BOARD_KB_PORT, cols[c]);
+        gpio_set_dir(BOARD_KB_PORT, cols[c], false);
+        gpio_pull_up(BOARD_KB_PORT, cols[c]);
+        gpio_set_schmitt(BOARD_KB_PORT, cols[c], true);
+    }
 }
 
-static unsigned char keypad_code(int row, int col)
+/*
+ * DC34 badge matrix (from dc34-core-hw / xous-core board-baosec):
+ *   row0 = 3-way jog: col0=Down, col1=press(Select), col2=Up
+ *   row1 = buttons:   col0=Right, col1=Left (col2 not populated)
+ *
+ * Jog press queues both FIRE (gameplay) and ENTER (menus); the unused key
+ * in the respective context is ignored by the engine. KEY_USE (open doors)
+ * stays on the UART spacebar.
+ */
+static void keypad_event(int row, int col, int pressed)
 {
-    /* baosec-style 2x3 matrix → Doom keys */
-    if (row == 1 && col == 2) {
-        return KEY_LEFTARROW;
-    }
-    if (row == 1 && col == 1) {
-        return KEY_ENTER;
-    }
-    if (row == 1 && col == 0) {
-        return KEY_RIGHTARROW;
-    }
     if (row == 0 && col == 0) {
-        return KEY_DOWNARROW;
+        queue_key(pressed, KEY_DOWNARROW);
+    } else if (row == 0 && col == 1) {
+        queue_key(pressed, KEY_FIRE);
+        queue_key(pressed, KEY_ENTER);
+    } else if (row == 0 && col == 2) {
+        queue_key(pressed, KEY_UPARROW);
+    } else if (row == 1 && col == 0) {
+        queue_key(pressed, KEY_RIGHTARROW);
+    } else if (row == 1 && col == 1) {
+        queue_key(pressed, KEY_LEFTARROW);
     }
-    if (row == 0 && col == 2) {
-        return KEY_UPARROW;
-    }
-    if (row == 0 && col == 1) {
-        return KEY_FIRE;
-    }
-    return 0;
 }
 
 static void keypad_poll(void)
@@ -122,16 +127,8 @@ static void keypad_poll(void)
                 now |= (uint8_t)(1u << bit);
             }
             int was = (s_prev_keys >> bit) & 1;
-            if (down && !was) {
-                unsigned char k = keypad_code(r, c);
-                if (k) {
-                    queue_key(1, k);
-                }
-            } else if (!down && was) {
-                unsigned char k = keypad_code(r, c);
-                if (k) {
-                    queue_key(0, k);
-                }
+            if (down != was) {
+                keypad_event(r, c, down);
             }
             bit++;
         }

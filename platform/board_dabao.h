@@ -1,6 +1,7 @@
 /*
  * Dabao evaluation board pin map for baochip-doom.
- * Optional I2C OLED breakout on I2C0 (SSD1327 / SH1107 / SSD1306).
+ * Optional I2C OLED breakout on I2C0 (SSD1327 / SH1107 / SSD1306),
+ * or a baosec-style SPI SH1107 when built with BAO_OLED_SPI.
  */
 
 #ifndef BOARD_DABAO_H
@@ -30,6 +31,7 @@
 #define BOARD_OLED_SPI_CD_PIN   2
 #define BOARD_OLED_SPI_CS_PORT  GPIO_PORT_C
 #define BOARD_OLED_SPI_CS_PIN   3
+#define BOARD_OLED_SPI_CLKDIV   24
 
 #define BOARD_W25Q_INSTANCE     BAO_DEFAULT_QSPI_INSTANCE
 #define BOARD_W25Q_CS           0
