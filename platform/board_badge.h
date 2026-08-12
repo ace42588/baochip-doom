@@ -17,7 +17,7 @@
  *   Keypad   Matrix on port F: rows PF6 (KB_R0) / PF7 (KB_R1, shared with JTAG TDI),
  *            columns PF2/PF3/PF4 (KB_C0..C2), switch closes row to column.
  *            Populated keys: row0 = 3-way jog (Down / press-Select / Up),
- *            row1 = Right (col0) and Left (col1) buttons. row1/col2 not stuffed.
+ *            row1 = Left (col0) and Right (col1) buttons. row1/col2 not stuffed.
  *   Accel    LIS2DH12 @ 0x19 on I2C0 (PB11 SCL / PB12 SDA).
  *   NOR      SPI flash on QSPI2 pins PC7..PC13 (SDK w25q instance 1).
  *   LEDs     WS2812 chain on PB15 (BIO-driven in stock firmware; unused here).

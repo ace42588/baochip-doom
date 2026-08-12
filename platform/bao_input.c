@@ -90,7 +90,7 @@ static void keypad_init(void)
 /*
  * DC34 badge matrix (from dc34-core-hw / xous-core board-baosec):
  *   row0 = 3-way jog: col0=Down, col1=press(Select), col2=Up
- *   row1 = buttons:   col0=Right, col1=Left (col2 not populated)
+ *   row1 = buttons:   col0=Left, col1=Right (col2 not populated)
  *
  * Jog press queues both FIRE (gameplay) and ENTER (menus); the unused key
  * in the respective context is ignored by the engine. KEY_USE (open doors)
@@ -106,9 +106,9 @@ static void keypad_event(int row, int col, int pressed)
     } else if (row == 0 && col == 2) {
         queue_key(pressed, KEY_UPARROW);
     } else if (row == 1 && col == 0) {
-        queue_key(pressed, KEY_RIGHTARROW);
-    } else if (row == 1 && col == 1) {
         queue_key(pressed, KEY_LEFTARROW);
+    } else if (row == 1 && col == 1) {
+        queue_key(pressed, KEY_RIGHTARROW);
     }
 }
 
