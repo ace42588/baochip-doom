@@ -1,17 +1,31 @@
 # baochip-doom
 
-Bare-metal [DOOM](https://github.com/ozkl/doomgeneric) for the **Baochip-1x** (DEF CON 34 badge / Dabao), built on [dabao-sdk](https://github.com/bunnie/dabao-sdk).
+Bare-metal [DOOM](https://github.com/ozkl/doomgeneric) for the **DEF CON 34 badge** (Baochip-1x / baosec-lite), built on [dabao-sdk](https://github.com/bunnie/dabao-sdk). The Dabao eval board is a secondary target (`BOARD=dabao`), not the default.
+
+## References
+
+This port is wired to the DC34 badge, not a generic Baochip breakout. Use these repos and docs:
+
+| Resource | What it is |
+|----------|------------|
+| [dc34-core-hw](https://github.com/bunnie/dc34-core-hw) | Badge schematics / KiCad (`defcon-34-v3`) — OLED, keypad, UART, NOR |
+| [Baochip-1x book](https://baochip.github.io/baochip-1x/) | SoC memory map, UDMA SPI, boot, RRAM/SRAM |
+| [dc34-console](https://github.com/bunnie/dc34-console) | Stock Xous firmware (`board-baosec` / oem-baosec-lite) |
+| [dc34-api](https://github.com/bunnie/dc34-api) | Shared IPC/API crate used by the stock firmware |
+| [dc34-vault](https://github.com/bunnie/dc34-vault) | Vault / secrets side of the stock badge image |
+| [xous-core](https://github.com/betrusted-io/xous-core/) | boot1, SH1107 driver, UF2 family, loader vs kernel slots |
+
+Also: [dc34-bio](https://github.com/bunnie/dc34-bio) (BIO uploader for stock firmware).
 
 ## Hardware
 
 | Item | Notes |
 |------|--------|
-| SoC | Baochip-1x — 350 MHz Vexriscv, 2 MiB SRAM, 4 MiB RRAM |
-| Dev board | [Dabao](https://www.crowdsupply.com/baochip/dabao) |
-| Target badge | DC34 badge — see [dc34-core-hw](https://github.com/bunnie/dc34-core-hw) schematics |
+| SoC | Baochip-1x — 350 MHz Vexriscv, 2 MiB SRAM, 4 MiB RRAM ([book](https://baochip.github.io/baochip-1x/)) |
+| **Default target** | **DC34 badge** — [dc34-core-hw](https://github.com/bunnie/dc34-core-hw) |
+| Optional | [Dabao](https://www.crowdsupply.com/baochip/dabao) eval board + I²C OLED breakout |
 
-Badge hardware (confirmed from [dc34-core-hw](https://github.com/bunnie/dc34-core-hw) and the stock
-[dc34-console](https://github.com/bunnie/dc34-console) firmware, a Xous build with `board-baosec`):
+Badge hardware (from [dc34-core-hw](https://github.com/bunnie/dc34-core-hw) and [dc34-console](https://github.com/bunnie/dc34-console)):
 
 | Peripheral | Details |
 |------------|---------|
@@ -21,9 +35,6 @@ Badge hardware (confirmed from [dc34-core-hw](https://github.com/bunnie/dc34-cor
 | SPI NOR | QSPI2 on PC7–PC13 |
 | LEDs | WS2812 chain on PB15 (BIO-driven; unused by this port) |
 | Console | UART2 PB13=RX / PB14=TX, 115200 8N1 |
-
-Related badge repos: [dc34-api](https://github.com/bunnie/dc34-api) (shared IPC/API crate),
-[dc34-bio](https://github.com/bunnie/dc34-bio) (BIO program uploader for the stock firmware).
 
 ## Quick start
 
@@ -36,12 +47,34 @@ git submodule update --init --recursive
 # Place shareware / trimmed IWAD
 cp /path/to/doom1.wad assets/doom1.wad
 
-make BOARD=badge WAD_BACKEND=embedded    # DC34 badge
-# or: make BOARD=dabao                   # Dabao dev board + I2C OLED breakout
+make                                 # DC34 badge (default)
+# or: make BOARD=dabao               # Dabao dev board + I2C OLED breakout
 # → build/doom.uf2
 ```
 
-Flash (board in boot1 REPL):
+Flash via the `BAOCHIP` mass-storage volume (hold **PROG** while plugging USB, or
+press PROG+RESET to re-enter boot1):
+
+1. Copy `build/doom.uf2` onto `BAOCHIP`. The badge OLED will show write progress
+   (`loader - NNk`, then `kernel - NNk`) — that is boot1 programming RRAM, not
+   DOOM. The image is larger than the loader slot, so the rest is reported as
+   "kernel".
+2. Eject the volume (or `sync`).
+3. Press **PROG** (closest to USB) to leave boot1 and run the image.
+
+After PROG you should see **`DC34 DOOM` / `loading`**, then engine init lines
+(`Z_Init`, `W_Init`, `R_Init`, …). `R_Init` can take a while (IWAD in RRAM).
+The title screen replaces that text once the first frame is drawn.
+
+A **solid white** panel was the old “we took the OLED but the engine trapped”
+failure (unaligned IWAD loads on RISC-V). Current builds show status or
+**`FATAL`** instead. If you still see the bao splash / `kernel - NNk`, boot1
+never jumped — eject and press PROG again.
+
+Do not expect the bao splash to turn into DOOM by unplugging alone if bootwait
+is on — PROG (or USB disconnect after a completed copy) is what boots.
+
+Serial flash (board already in boot1 REPL):
 
 ```sh
 make flash PORT=/dev/ttyACM0
@@ -86,7 +119,7 @@ Dev-board panel size override: `OLED_W=96 OLED_H=96`. Headless (no OLED) still r
 
 | Mode | Build | Notes |
 |------|-------|--------|
-| Embedded RRAM | `WAD_BACKEND=embedded` (default) | Link `assets/doom1.wad` into UF2. Use a trimmed/silent IWAD (~1.4 MiB). Full 4 MiB IWAD will not fit with the engine. |
+| Embedded RRAM | `WAD_BACKEND=embedded` (default) | Link `assets/doom1.wad` into UF2. Use a trimmed/silent IWAD (~1.4 MiB). Full 4 MiB IWAD will not fit with the engine. Lumps are copied into aligned SRAM (the IWAD is not mmap'd — RISC-V faults on the unaligned lump pointers in a typical `doom1.wad`). |
 | SPI NOR | `WAD_BACKEND=spi` | Full `doom1.wad` on the QSPI2 NOR; see `scripts/flash_wad.py`. On the badge this area also holds the stock firmware's PDDB — expect to erase it. |
 
 ## Layout
@@ -107,4 +140,4 @@ build/doom.uf2
 
 ## Security note
 
-The stock DC34 badge firmware is a Xous build ([dc34-console](https://github.com/bunnie/dc34-console)); this port replaces it. Loading unsigned/developer firmware on Baochip clears device secrets (see Xous/Baochip security model) — your badge's light-gene keys and PDDB contents will be lost. Expected for hobby badge demos.
+The stock DC34 badge firmware is a Xous build ([dc34-console](https://github.com/bunnie/dc34-console) on [xous-core](https://github.com/betrusted-io/xous-core/)); this port replaces it. Loading unsigned/developer firmware on Baochip clears device secrets (see Xous/Baochip security model, [dc34-vault](https://github.com/bunnie/dc34-vault)) — your badge's light-gene keys and PDDB contents will be lost. Expected for hobby badge demos.

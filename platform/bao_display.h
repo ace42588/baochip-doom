@@ -29,4 +29,11 @@ void bao_display_present_rgba(const uint32_t *fb, int width, int height);
 /* Present luminance 8-bit source */
 void bao_display_present_gray(const uint8_t *gray, int width, int height);
 
+/* 1-bit status / error text on the OLED (DC34 badge and other 1-bit panels). */
+void bao_display_status(const char *msg);
+void bao_display_fatal(const char *msg);
+
+/* Mirror a UART log line onto the OLED, throttled so R_Init dots stay cheap. */
+void bao_display_log_line(const char *msg);
+
 #endif

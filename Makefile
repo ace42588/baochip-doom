@@ -23,10 +23,11 @@ ARCH    := -march=rv32imac_zicsr_zifencei -mabi=ilp32
 CFLAGS  := $(ARCH) -Os -g -Wall -Wno-unused -Wno-maybe-uninitialized \
            -ffreestanding -fno-builtin -fno-common -nostdinc \
            -DNORMALUNIX -D_DEFAULT_SOURCE \
-           -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
+           -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
+           -DSEVS_CRASH_RECORD_ADDR=0x5001FF00U
 
-# Board: dabao (default) or badge
-BOARD ?= dabao
+# Board: badge (default, DC34) or dabao
+BOARD ?= badge
 ifeq ($(BOARD),badge)
   CFLAGS += -DBOARD_BADGE
 endif
@@ -150,7 +151,7 @@ all: $(UF2)
 
 help:
 	@echo "Targets: all clean size flash"
-	@echo "Vars: BOARD=dabao|badge  WAD_BACKEND=embedded|spi"
+	@echo "Vars: BOARD=badge|dabao  WAD_BACKEND=embedded|spi"
 	@echo "      OLED_DRIVER=ssd1327|sh1107|spi  OLED_W=128|96  OLED_H=128|96  (dabao only;"
 	@echo "      badge display is fixed: SPI SH1107 128x128)"
 

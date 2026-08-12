@@ -14,12 +14,17 @@
 #include "bao.h"
 #include "board.h"
 #include "bao_wad.h"
+#include "bao_display.h"
 
 int errno;
 
 #ifndef BAO_HEAP_SIZE
 #define BAO_HEAP_SIZE (1400u * 1024u)
 #endif
+
+typedef struct {
+    size_t size;
+} alloc_hdr_t;
 
 static uint8_t g_heap[BAO_HEAP_SIZE] __attribute__((aligned(8)));
 static size_t g_heap_used;
@@ -28,15 +33,19 @@ void *malloc(size_t n)
 {
     size_t align = 8;
     size_t used = (g_heap_used + (align - 1)) & ~(align - 1);
+    size_t need;
+    alloc_hdr_t *h;
     if (n == 0) {
         n = 1;
     }
-    if (used + n > BAO_HEAP_SIZE) {
+    need = (sizeof(alloc_hdr_t) + n + (align - 1)) & ~(align - 1);
+    if (used + need > BAO_HEAP_SIZE) {
         return NULL;
     }
-    void *p = &g_heap[used];
-    g_heap_used = used + n;
-    return p;
+    h = (alloc_hdr_t *)&g_heap[used];
+    h->size = n;
+    g_heap_used = used + need;
+    return h + 1;
 }
 
 void free(void *p)
@@ -49,32 +58,29 @@ void *calloc(size_t nmemb, size_t size)
     size_t n = nmemb * size;
     void *p = malloc(n);
     if (p) {
-        uint8_t *b = (uint8_t *)p;
-        for (size_t i = 0; i < n; i++) {
-            b[i] = 0;
-        }
+        memset(p, 0, n);
     }
     return p;
 }
 
 void *realloc(void *ptr, size_t size)
 {
+    alloc_hdr_t *h;
+    void *n;
+    size_t copy;
     if (!ptr) {
         return malloc(size);
     }
     if (size == 0) {
         return NULL;
     }
-    void *n = malloc(size);
+    h = (alloc_hdr_t *)ptr - 1;
+    n = malloc(size);
     if (!n) {
         return NULL;
     }
-    /* Best-effort copy; bump allocator cannot know old size. */
-    uint8_t *d = (uint8_t *)n;
-    const uint8_t *s = (const uint8_t *)ptr;
-    for (size_t i = 0; i < size; i++) {
-        d[i] = s[i];
-    }
+    copy = h->size < size ? h->size : size;
+    memcpy(n, ptr, copy);
     return n;
 }
 
@@ -415,6 +421,7 @@ int puts(const char *s)
     uart_puts(BOARD_UART, s);
     uart_putc(BOARD_UART, '\r');
     uart_putc(BOARD_UART, '\n');
+    bao_display_log_line(s);
     return 0;
 }
 
@@ -447,6 +454,7 @@ int printf(const char *fmt, ...)
     /* Use a tiny hand-rolled path: print format literally if no %, else mini_printf. */
     if (!strchr(fmt, '%')) {
         uart_puts(BOARD_UART, fmt);
+        bao_display_log_line(fmt);
         return 0;
     }
 
@@ -458,6 +466,7 @@ int printf(const char *fmt, ...)
         extern int bao_vsnprintf(char *out, size_t out_sz, const char *fmt, va_list ap);
         int n = bao_vsnprintf(buf, sizeof(buf), fmt, ap);
         uart_puts(BOARD_UART, buf);
+        bao_display_log_line(buf);
         va_end(ap);
         return n;
     }
@@ -473,6 +482,11 @@ int fprintf(FILE *stream, const char *fmt, ...)
     int n = bao_vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     uart_puts(BOARD_UART, buf);
+    if (stream == stderr && buf[0] && buf[0] != '\n') {
+        bao_display_fatal(buf);
+    } else {
+        bao_display_log_line(buf);
+    }
     return n;
 }
 
@@ -483,6 +497,11 @@ int vfprintf(FILE *stream, const char *fmt, va_list ap)
     extern int bao_vsnprintf(char *out, size_t out_sz, const char *fmt, va_list ap);
     int n = bao_vsnprintf(buf, sizeof(buf), fmt, ap);
     uart_puts(BOARD_UART, buf);
+    if (stream == stderr && buf[0] && buf[0] != '\n') {
+        bao_display_fatal(buf);
+    } else {
+        bao_display_log_line(buf);
+    }
     return n;
 }
 
@@ -525,76 +544,118 @@ int bao_vsnprintf(char *out, size_t out_sz, const char *fmt, va_list ap)
             continue;
         }
         fmt++;
+
+        int zero_pad = 0;
+        int width = 0;
+        int prec = -1;
         int long_mod = 0;
+
+        while (*fmt == '0' || *fmt == '-' || *fmt == '+' || *fmt == ' ' || *fmt == '#') {
+            if (*fmt == '0') {
+                zero_pad = 1;
+            }
+            fmt++;
+        }
+        while (*fmt >= '0' && *fmt <= '9') {
+            width = width * 10 + (*fmt++ - '0');
+        }
+        if (*fmt == '.') {
+            prec = 0;
+            fmt++;
+            while (*fmt >= '0' && *fmt <= '9') {
+                prec = prec * 10 + (*fmt++ - '0');
+            }
+        }
         if (*fmt == 'l') {
             long_mod = 1;
             fmt++;
         }
         char spec = *fmt ? *fmt++ : '\0';
+
         if (spec == '%') {
             out[o++] = '%';
-        } else if (spec == 's') {
+            continue;
+        }
+
+        if (spec == 's') {
             const char *s = va_arg(ap, const char *);
+            int n = 0;
             if (!s) {
                 s = "(null)";
             }
-            while (*s && o + 1 < out_sz) {
-                out[o++] = *s++;
+            while (s[n] && (prec < 0 || n < prec)) {
+                n++;
             }
-        } else if (spec == 'c') {
-            out[o++] = (char)va_arg(ap, int);
-        } else if (spec == 'd' || spec == 'i') {
-            long v = long_mod ? va_arg(ap, long) : va_arg(ap, int);
-            char tmp[16];
-            int n = 0;
-            int neg = 0;
-            if (v < 0) {
-                neg = 1;
-                v = -v;
-            }
-            if (v == 0) {
-                tmp[n++] = '0';
-            }
-            while (v > 0 && n < (int)sizeof(tmp)) {
-                tmp[n++] = '0' + (v % 10);
-                v /= 10;
-            }
-            if (neg && o + 1 < out_sz) {
-                out[o++] = '-';
+            while (width > n && o + 1 < out_sz) {
+                out[o++] = ' ';
+                width--;
             }
             while (n-- > 0 && o + 1 < out_sz) {
-                out[o++] = tmp[n];
+                out[o++] = *s++;
             }
-        } else if (spec == 'u' || spec == 'x' || spec == 'X' || spec == 'p') {
+            continue;
+        }
+
+        if (spec == 'c') {
+            out[o++] = (char)va_arg(ap, int);
+            continue;
+        }
+
+        if (spec == 'd' || spec == 'i' || spec == 'u' || spec == 'x' || spec == 'X' || spec == 'p') {
+            char tmp[24];
+            int n = 0;
+            int neg = 0;
+            int base = (spec == 'x' || spec == 'X' || spec == 'p') ? 16 : 10;
             unsigned long v;
+            int min_digits;
+
             if (spec == 'p') {
                 v = (unsigned long)va_arg(ap, void *);
+            } else if (spec == 'd' || spec == 'i') {
+                long sv = long_mod ? va_arg(ap, long) : va_arg(ap, int);
+                if (sv < 0) {
+                    neg = 1;
+                    v = (unsigned long)(-(sv + 1)) + 1UL;
+                } else {
+                    v = (unsigned long)sv;
+                }
             } else {
                 v = long_mod ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
             }
-            char tmp[16];
-            int n = 0;
-            int base = (spec == 'x' || spec == 'X' || spec == 'p') ? 16 : 10;
+
             if (v == 0) {
                 tmp[n++] = '0';
             }
             while (v > 0 && n < (int)sizeof(tmp)) {
-                int d = v % base;
+                int d = (int)(v % (unsigned)base);
                 tmp[n++] = (char)(d < 10 ? '0' + d : (spec == 'X' ? 'A' : 'a') + d - 10);
-                v /= base;
+                v /= (unsigned)base;
             }
+
+            min_digits = (prec >= 0) ? prec : (zero_pad ? width - neg : 0);
             if (spec == 'p' && o + 2 < out_sz) {
                 out[o++] = '0';
                 out[o++] = 'x';
             }
+            if (neg && o + 1 < out_sz) {
+                out[o++] = '-';
+            }
+            while (n < min_digits && n < (int)sizeof(tmp)) {
+                tmp[n++] = '0';
+            }
+            while (width > n + neg && o + 1 < out_sz) {
+                out[o++] = ' ';
+                width--;
+            }
             while (n-- > 0 && o + 1 < out_sz) {
                 out[o++] = tmp[n];
             }
-        } else {
-            out[o++] = '%';
-            if (o + 1 < out_sz && spec) {
-                out[o++] = spec;
-            }
+            continue;
+        }
+
+        out[o++] = '%';
+        if (o + 1 < out_sz && spec) {
+            out[o++] = spec;
         }
     }
     out[o] = 0;

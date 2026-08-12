@@ -16,6 +16,13 @@
 
 static uint32_t g_frames;
 
+void sevs_target_uart_write_str(const char *s)
+{
+    if (s) {
+        uart_puts(BOARD_UART, s);
+    }
+}
+
 void DG_Init(void)
 {
     bao_input_init();
@@ -82,12 +89,15 @@ int main(void)
         "doom",
         "-iwad", "doom1.wad",
         "-mb", "1",
+        "-nosound",
         "-nogui",
         NULL
     };
-    const int argc = 5;
+    const int argc = 7;
 
     bao_init();
+    /* Polling drivers only; boot1 may have left global IRQs enabled. */
+    __asm__ volatile ("csrci mstatus, 8");
 
     gpio_init(BOARD_LED_PORT, BOARD_LED_PIN);
     gpio_set_dir(BOARD_LED_PORT, BOARD_LED_PIN, true);
@@ -95,16 +105,25 @@ int main(void)
 
     mini_printf("\r\n=== baochip-doom (%s) ===\r\n", BOARD_NAME);
 
+    /* Take over the OLED before doomgeneric_Create. R_Init can take a
+     * while (and used to trap on unaligned IWAD loads). */
+    bao_display_init();
+    bao_input_init();
+    bao_display_status("wad init");
+
     if (!bao_wad_init()) {
         mini_printf("FATAL: no IWAD\r\n");
+        bao_display_fatal("no IWAD");
         for (;;) {
             gpio_toggle(BOARD_LED_PORT, BOARD_LED_PIN);
             delay_ms(200);
         }
     }
 
+    bao_display_status("D_DoomMain");
     doomgeneric_Create(argc, argv);
 
+    bao_display_status("main loop");
     for (;;) {
         doomgeneric_Tick();
     }

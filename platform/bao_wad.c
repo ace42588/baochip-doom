@@ -116,11 +116,15 @@ static wad_file_t *W_Bao_OpenFile(char *path)
 
     result = Z_Malloc(sizeof(*result), PU_STATIC, 0);
     result->wad.file_class = &stdc_wad_file;
-#if defined(WAD_BACKEND_SPI)
+    /*
+     * Never mmap the IWAD. The blob lives in RRAM at whatever file
+     * offset each lump has, and shareware doom1.wad has hundreds of
+     * odd/2-byte-aligned lumps (TEXTURE1, PNAMES, TITLEPIC, VERTEXES,
+     * …). RISC-V rv32imac faults on unaligned 16/32-bit loads, which
+     * is how R_Init was dying with a white OLED after display init.
+     * W_CacheLumpNum copies into 4-byte-aligned zone memory instead.
+     */
     result->wad.mapped = NULL;
-#else
-    result->wad.mapped = (byte *)g_wad;
-#endif
     result->wad.length = (unsigned int)g_wad_len;
     return &result->wad;
 }
@@ -162,13 +166,14 @@ static size_t W_Bao_Read(wad_file_t *wad, unsigned int offset,
     }
     return done;
 #else
-    if (offset >= wad->length) {
+    (void)wad;
+    if (!g_wad || offset >= g_wad_len) {
         return 0;
     }
-    if (offset + buffer_len > wad->length) {
-        buffer_len = wad->length - offset;
+    if (offset + buffer_len > g_wad_len) {
+        buffer_len = g_wad_len - offset;
     }
-    memcpy(buffer, wad->mapped + offset, buffer_len);
+    memcpy(buffer, g_wad + offset, buffer_len);
     return buffer_len;
 #endif
 }

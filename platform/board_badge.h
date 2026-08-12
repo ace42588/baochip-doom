@@ -1,10 +1,13 @@
 /*
  * DEF CON 34 badge board pack.
  *
- * Confirmed against the released hardware/firmware repos:
- *   - github.com/bunnie/dc34-core-hw   (KiCad: defcon-34-v3)
- *   - github.com/bunnie/dc34-console   (stock Xous firmware, board-baosec + oem-baosec-lite)
- *   - github.com/bunnie/dc34-api
+ * Hardware and firmware references (this is baosec-lite, not the Dabao eval board):
+ *   - https://github.com/bunnie/dc34-core-hw          KiCad: defcon-34-v3
+ *   - https://baochip.github.io/baochip-1x/            Baochip-1x book / SoC docs
+ *   - https://github.com/bunnie/dc34-console           stock Xous firmware (board-baosec)
+ *   - https://github.com/bunnie/dc34-api
+ *   - https://github.com/bunnie/dc34-vault
+ *   - https://github.com/betrusted-io/xous-core/       boot1, SH1107 driver, memory map
  *
  * The badge is a "baosec-lite" style design:
  *   OLED     CH112OL001A module, SH1107-class, 128x128 1-bit, 4-wire SPI on SPIM2:
