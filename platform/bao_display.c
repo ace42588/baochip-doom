@@ -18,6 +18,7 @@
 #include "bao.h"
 #include "board.h"
 #include "bao_display.h"
+#include "bao_accel.h"
 #include "hardware/i2c.h"
 #include "hardware/spi.h"
 #include "hardware/gpio.h"
@@ -59,6 +60,26 @@ static const uint8_t bayer4[4][4] = {
     { 3, 11,  1,  9 },
     { 15, 7, 13,  5 },
 };
+
+/*
+ * Portrait scheme: hold the badge 90° clockwise (long edge vertical).
+ * Rotate logical pixels 90° clockwise onto the panel: (x, y) → (H-1-y, x).
+ * Selected via bao_controls_is_portrait(): compile-time constant for
+ * CONTROLS= builds, runtime (gravity) with ACCEL=orient.
+ */
+static void logical_to_panel(int *x, int *y)
+{
+    int lx = *x;
+    int ly = *y;
+    *x = FB_H - 1 - ly;
+    *y = lx;
+}
+
+static void panel_to_logical(int px, int py, int *lx, int *ly)
+{
+    *lx = py;
+    *ly = FB_H - 1 - px;
+}
 
 /* ------------------------------------------------------------------ */
 /* I2C panels (Dabao dev-board breakouts)                              */
@@ -292,6 +313,11 @@ bool bao_display_init(void)
     if (g_backend != BAO_DISPLAY_NONE) {
         return true;
     }
+#ifdef BAO_ACCEL_ORIENT
+    /* Sample gravity before the first status screen so it is already
+     * drawn in the right orientation. */
+    bao_accel_init();
+#endif
     memset(g_fb, 0, sizeof(g_fb));
 
 #if defined(BAO_OLED_SPI) || BOARD_OLED_SPI_ONLY
@@ -390,13 +416,24 @@ void bao_display_present_gray(const uint8_t *gray, int width, int height)
     if (g_backend == BAO_DISPLAY_I2C_SSD1327) {
         /* Scale into 4-bit grayscale: two horizontal pixels per byte. */
         for (int y = 0; y < FB_H; y++) {
-            int sy = (y * height) / FB_H;
             uint8_t *dst = &g_fb[y * (FB_W / 2)];
             for (int x = 0; x < FB_W; x += 2) {
-                int sx0 = (x * width) / FB_W;
-                int sx1 = ((x + 1) * width) / FB_W;
-                uint8_t l0 = gray[sy * width + sx0] >> 4;
-                uint8_t l1 = gray[sy * width + sx1] >> 4;
+                int lx0, ly0, lx1, ly1;
+                if (bao_controls_is_portrait()) {
+                    panel_to_logical(x, y, &lx0, &ly0);
+                    panel_to_logical(x + 1, y, &lx1, &ly1);
+                } else {
+                    lx0 = x;
+                    ly0 = y;
+                    lx1 = x + 1;
+                    ly1 = y;
+                }
+                int sx0 = (lx0 * width) / FB_W;
+                int sy0 = (ly0 * height) / FB_H;
+                int sx1 = (lx1 * width) / FB_W;
+                int sy1 = (ly1 * height) / FB_H;
+                uint8_t l0 = gray[sy0 * width + sx0] >> 4;
+                uint8_t l1 = gray[sy1 * width + sx1] >> 4;
                 dst[x / 2] = (uint8_t)((l0 << 4) | l1);
             }
         }
@@ -407,9 +444,14 @@ void bao_display_present_gray(const uint8_t *gray, int width, int height)
     /* 1-bit panels: Bayer dither */
     memset(g_fb, 0, MONO_BYTES);
     for (int oy = 0; oy < FB_H; oy++) {
-        int sy = (oy * height) / FB_H;
         for (int ox = 0; ox < FB_W; ox++) {
-            int sx = (ox * width) / FB_W;
+            int lx = ox;
+            int ly = oy;
+            if (bao_controls_is_portrait()) {
+                panel_to_logical(ox, oy, &lx, &ly);
+            }
+            int sy = (ly * height) / FB_H;
+            int sx = (lx * width) / FB_W;
             uint8_t lum = gray[sy * width + sx];
             uint8_t thr = (uint8_t)(bayer4[oy & 3][ox & 3] * 16);
             if (lum > thr) {
@@ -486,6 +528,9 @@ static const uint8_t font5x7[64][5] = {
 
 static void fb_plot(int x, int y, int on)
 {
+    if (bao_controls_is_portrait()) {
+        logical_to_panel(&x, &y);
+    }
     if (x < 0 || y < 0 || x >= FB_W || y >= FB_H) {
         return;
     }

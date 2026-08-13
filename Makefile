@@ -32,6 +32,39 @@ ifeq ($(BOARD),badge)
   CFLAGS += -DBOARD_BADGE
 endif
 
+# Control scheme: landscape (default, badge hanging/wide) or portrait
+# (badge rotated 90° CW so the long edge is vertical).
+CONTROLS ?= landscape
+ifeq ($(CONTROLS),portrait)
+  CFLAGS += -DBAO_CONTROLS_PORTRAIT
+endif
+
+# Accelerometer (badge only, LIS2DH12):
+#   both   (default on badge) tilt strafe + gravity orientation switching
+#   strafe tilt left/right = strafe keys; CONTROLS= picks fixed orientation
+#   orient gravity selects landscape/portrait at runtime; CONTROLS= is the
+#          fallback when the chip is missing or the badge lies flat
+#   off    (default on dabao) accelerometer unused
+ifeq ($(BOARD),badge)
+  ACCEL ?= both
+else
+  ACCEL ?= off
+endif
+ifneq ($(filter $(ACCEL),strafe both),)
+  CFLAGS += -DBAO_ACCEL_STRAFE
+endif
+ifneq ($(filter $(ACCEL),orient both),)
+  CFLAGS += -DBAO_ACCEL_ORIENT
+endif
+ifeq ($(filter $(ACCEL),off strafe orient both),)
+  $(error ACCEL must be off, strafe, orient, or both)
+endif
+ifneq ($(ACCEL),off)
+  ifneq ($(BOARD),badge)
+    $(error ACCEL=$(ACCEL) requires BOARD=badge (no accelerometer on $(BOARD)))
+  endif
+endif
+
 # WAD backend: embedded (default) or spi
 WAD_BACKEND ?= embedded
 ifeq ($(WAD_BACKEND),spi)
@@ -129,7 +162,8 @@ PLATFORM_SRCS := \
   $(PLATFORM)/bao_libc.c \
   $(PLATFORM)/bao_wad.c \
   $(PLATFORM)/bao_display.c \
-  $(PLATFORM)/bao_input.c
+  $(PLATFORM)/bao_input.c \
+  $(PLATFORM)/bao_accel.c
 
 SDK_OBJS := $(patsubst $(SDK)/%.c,$(BUILD)/sdk/%.o,$(SDK_SRCS))
 DG_OBJS  := $(patsubst %.c,$(BUILD)/dg/%.o,$(DG_SRCS))
@@ -152,6 +186,8 @@ all: $(UF2)
 help:
 	@echo "Targets: all clean size flash"
 	@echo "Vars: BOARD=badge|dabao  WAD_BACKEND=embedded|spi"
+	@echo "      CONTROLS=landscape (default) | portrait"
+	@echo "      ACCEL=both (default on badge) | strafe | orient | off"
 	@echo "      OLED_DRIVER=ssd1327|sh1107|spi  OLED_W=128|96  OLED_H=128|96  (dabao only;"
 	@echo "      badge display is fixed: SPI SH1107 128x128)"
 

@@ -17,7 +17,7 @@
  *   Keypad   Matrix on port F: rows PF6 (KB_R0) / PF7 (KB_R1, shared with JTAG TDI),
  *            columns PF2/PF3/PF4 (KB_C0..C2), switch closes row to column.
  *            Populated keys: row0 = 3-way jog (Down / press-Select / Up),
- *            row1 = Left (col0) and Right (col1) buttons. row1/col2 not stuffed.
+ *            row1 = Left (col0), Right (col1), Center/middle (col2) face buttons.
  *   Accel    LIS2DH12 @ 0x19 on I2C0 (PB11 SCL / PB12 SDA).
  *   NOR      SPI flash on QSPI2 pins PC7..PC13 (SDK w25q instance 1).
  *   LEDs     WS2812 chain on PB15 (BIO-driven in stock firmware; unused here).
@@ -52,9 +52,25 @@
 #define BOARD_OLED_HEIGHT       128
 #endif
 
-/* I2C0 kept for the LIS2DH12 accelerometer (not used by DOOM yet) */
+/* I2C0 carries the LIS2DH12 accelerometer (ACCEL=strafe|orient builds) */
 #define BOARD_OLED_I2C          0
+#define BOARD_ACCEL_I2C         0
 #define BOARD_ACCEL_I2C_ADDR    0x19
+
+/* LIS2DH12 axis mapping in the landscape badge frame: LR points toward the
+ * badge's right edge, DOWN toward gravity when the badge hangs in landscape.
+ * PORTRAIT_DIR is the rotation that reaches portrait: -1 = 90° counter-
+ * clockwise (left edge down), +1 = 90° clockwise (right edge down).
+ * Verified on hardware: X reads +1g held upright in landscape (so X = DOWN)
+ * and pitch was bleeding into strafe when X was assumed to be LR. Y is the
+ * left/right axis; its sign and PORTRAIT_DIR are still best guesses — if
+ * tilt or auto-rotation is backwards, check the boot-time "accel:" log line
+ * and flip the constants here. Axis index: 0 = X, 1 = Y, 2 = Z. */
+#define BOARD_ACCEL_LR_AXIS      1
+#define BOARD_ACCEL_LR_SIGN      (-1)
+#define BOARD_ACCEL_DOWN_AXIS    0
+#define BOARD_ACCEL_DOWN_SIGN    1
+#define BOARD_ACCEL_PORTRAIT_DIR (-1)
 
 #define BOARD_W25Q_INSTANCE     1
 #define BOARD_W25Q_CS           0
