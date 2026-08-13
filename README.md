@@ -57,6 +57,11 @@ On the badge the LIS2DH12 accelerometer is enabled by default (`ACCEL=both`):
 - Rotate the badge between landscape and portrait and the keypad map and
   OLED rotation follow. Strafe is paused for half a second after a flip so
   the rotation gesture itself doesn't strafe.
+- Pitch-to-move, off by default: hold both turn buttons (landscape) or the
+  forward + back buttons (portrait) for ~0.6 s to toggle it. The pose held
+  at that moment becomes neutral; tilt ~15° forward/back from there to
+  move. Every enable re-captures neutral, and an orientation flip re-learns
+  it automatically. Available in any accelerometer build.
 
 `CONTROLS=landscape` (default) or `CONTROLS=portrait` sets the starting
 orientation — the fixed orientation when auto-rotation is off, otherwise
@@ -66,8 +71,8 @@ Other accelerometer builds: `ACCEL=strafe` (tilt strafe only, fixed
 orientation), `ACCEL=orient` (auto-orientation only), `ACCEL=off` (buttons
 only; always the case on Dabao, which has no accelerometer). At boot the
 console prints the resting gravity vector (`accel: WHO=0x33 x=.. y=.. z=..`);
-if tilt or auto-rotation is backwards, flip the `BOARD_ACCEL_*` axis/sign
-constants in `platform/board_badge.h`.
+if tilt, pitch, or auto-rotation is backwards, flip the `BOARD_ACCEL_*`
+axis/sign constants in `platform/board_badge.h`.
 
 ### Landscape (default)
 

@@ -20,6 +20,12 @@ static unsigned int s_KeyQueueReadIndex;
 #if BOARD_HAS_KEYPAD
 static uint8_t s_prev_keys;
 static bool s_map_portrait;
+
+/* Pitch-control toggle chord: hold for this long to toggle. */
+#define KEYPAD_CHORD_MS 600
+static bool s_chord_held;
+static bool s_chord_fired;
+static uint32_t s_chord_ms;
 #endif
 
 static void queue_key(int pressed, unsigned char key)
@@ -179,6 +185,29 @@ static void keypad_poll(void)
         delay_us(1);
     }
     s_prev_keys = now;
+
+    /* Pitch-control toggle: hold the opposing-pair chord for a moment.
+     * Landscape: turn left + turn right (left + right face buttons).
+     * Portrait: forward + back (middle + left face buttons).
+     * Bit index is row*3 + col. */
+    {
+        uint8_t chord = s_map_portrait
+                            ? (uint8_t)((1u << 5) | (1u << 3))
+                            : (uint8_t)((1u << 4) | (1u << 3));
+        if ((now & chord) == chord) {
+            uint32_t t = (uint32_t)millis();
+            if (!s_chord_held) {
+                s_chord_held = true;
+                s_chord_ms = t;
+            } else if (!s_chord_fired && t - s_chord_ms >= KEYPAD_CHORD_MS) {
+                s_chord_fired = true;
+                bao_accel_pitch_toggle();
+            }
+        } else {
+            s_chord_held = false;
+            s_chord_fired = false;
+        }
+    }
 }
 #endif
 

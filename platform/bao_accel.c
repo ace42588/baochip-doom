@@ -4,6 +4,11 @@
  * ACCEL=strafe: tilt left/right queues KEY_STRAFE_L / KEY_STRAFE_R.
  * ACCEL=orient: gravity selects landscape vs portrait controls + display.
  *
+ * Any accel build also supports pitch-to-move: off by default, toggled at
+ * runtime by a keypad chord (see bao_input.c). Enabling captures the
+ * current pose as neutral; tilting forward/back from there queues
+ * KEY_UPARROW / KEY_DOWNARROW.
+ *
  * Axis frame: BOARD_ACCEL_LR_* points toward the badge's right edge in
  * landscape, BOARD_ACCEL_DOWN_* toward gravity when hanging in landscape.
  * BOARD_ACCEL_PORTRAIT_DIR gives the rotation that reaches portrait
@@ -42,13 +47,29 @@
  * (and when flat on a table, Z dominant) the state just holds. */
 #define ORIENT_SWITCH_MG     750
 
-/* With strafe + orient combined, ignore tilt briefly after an orientation
- * flip so the rotation gesture itself doesn't register as strafing. */
-#define STRAFE_FLIP_INHIBIT_MS 500
+/* Ignore tilt briefly after an orientation flip so the rotation gesture
+ * itself doesn't register as strafe or pitch movement. */
+#define FLIP_INHIBIT_MS      500
+
+/* Pitch thresholds on the cross product of the current (down, z) gravity
+ * pair against the captured neutral pair: cross ≈ sin(Δpitch) · |g|² with
+ * mg inputs, so 250000 ≈ 14.5° from neutral to press, 150000 ≈ 8.6° to
+ * release. */
+#define PITCH_PRESS_X        250000
+#define PITCH_RELEASE_X      150000
+
+/* Panel-normal axis: the one that is neither LR nor DOWN. */
+#define ACCEL_Z_AXIS         (3 - BOARD_ACCEL_LR_AXIS - BOARD_ACCEL_DOWN_AXIS)
 
 static bool s_ok;
 static bool s_inited;
 static uint32_t s_last_poll_ms;
+
+static bool s_pitch_enabled;     /* runtime toggle, off at boot */
+static bool s_pitch_recapture;   /* re-learn neutral on next sample */
+static int32_t s_pitch_d0;       /* neutral in-plane down component (mg) */
+static int32_t s_pitch_z0;       /* neutral panel-normal component (mg) */
+static int s_pitch_move;         /* -1 = back held, 0 = none, +1 = forward */
 
 #ifdef BAO_ACCEL_ORIENT
 #ifdef BAO_CONTROLS_PORTRAIT
@@ -67,9 +88,21 @@ bool bao_controls_is_portrait(void)
 static int s_strafe;             /* -1 = left held, 0 = none, +1 = right held */
 #endif
 
-#if defined(BAO_ACCEL_STRAFE) && defined(BAO_ACCEL_ORIENT)
+#ifdef BAO_ACCEL_ORIENT
 static bool s_flip_inhibit;
 static uint32_t s_flip_ms;
+
+static bool flip_inhibited(uint32_t now)
+{
+    if (!s_flip_inhibit) {
+        return false;
+    }
+    if (now - s_flip_ms < FLIP_INHIBIT_MS) {
+        return true;
+    }
+    s_flip_inhibit = false;
+    return false;
+}
 #endif
 
 static int accel_write_reg(uint8_t reg, uint8_t val)
@@ -109,12 +142,9 @@ static void orient_update(const int16_t mg[3], uint32_t now)
 
     if (portrait != s_portrait) {
         s_portrait = portrait;
-#ifdef BAO_ACCEL_STRAFE
         s_flip_inhibit = true;
         s_flip_ms = now;
-#endif
     }
-    (void)now;
 }
 #endif
 
@@ -128,20 +158,14 @@ static void strafe_update(const int16_t mg[3], uint32_t now)
     /* Guard: the roll gesture that flips orientation would otherwise read
      * as a hard strafe on the way in and out. Hold strafe released until
      * the badge has settled in its new pose. */
-    if (s_flip_inhibit) {
-        if (now - s_flip_ms < STRAFE_FLIP_INHIBIT_MS) {
-            want = 0;
-            if (want != s_strafe) {
-                if (s_strafe > 0) {
-                    bao_input_queue_key(0, KEY_STRAFE_R);
-                } else if (s_strafe < 0) {
-                    bao_input_queue_key(0, KEY_STRAFE_L);
-                }
-                s_strafe = 0;
-            }
-            return;
+    if (flip_inhibited(now)) {
+        if (s_strafe > 0) {
+            bao_input_queue_key(0, KEY_STRAFE_R);
+        } else if (s_strafe < 0) {
+            bao_input_queue_key(0, KEY_STRAFE_L);
         }
-        s_flip_inhibit = false;
+        s_strafe = 0;
+        return;
     }
 #endif
     (void)now;
@@ -186,6 +210,110 @@ static void strafe_update(const int16_t mg[3], uint32_t now)
     }
 }
 #endif
+
+/* Gravity component along the current orientation's screen-down (mg). */
+static int32_t pitch_down_mg(const int16_t mg[3])
+{
+    if (bao_controls_is_portrait()) {
+        return BOARD_ACCEL_PORTRAIT_DIR *
+               (BOARD_ACCEL_LR_SIGN * mg[BOARD_ACCEL_LR_AXIS]);
+    }
+    return BOARD_ACCEL_DOWN_SIGN * mg[BOARD_ACCEL_DOWN_AXIS];
+}
+
+static void pitch_release(void)
+{
+    if (s_pitch_move > 0) {
+        bao_input_queue_key(0, KEY_UPARROW);
+    } else if (s_pitch_move < 0) {
+        bao_input_queue_key(0, KEY_DOWNARROW);
+    }
+    s_pitch_move = 0;
+}
+
+static void pitch_update(const int16_t mg[3], uint32_t now)
+{
+    int32_t d, z, cross;
+    int want = s_pitch_move;
+
+    if (!s_pitch_enabled) {
+        return;
+    }
+
+#ifdef BAO_ACCEL_ORIENT
+    /* An orientation flip moves the down axis out from under the captured
+     * neutral: hold movement released through the settle window, then
+     * re-learn neutral in the new pose. */
+    if (flip_inhibited(now)) {
+        pitch_release();
+        s_pitch_recapture = true;
+        return;
+    }
+#endif
+    (void)now;
+
+    d = pitch_down_mg(mg);
+    z = BOARD_ACCEL_PITCH_SIGN * mg[ACCEL_Z_AXIS];
+
+    if (s_pitch_recapture) {
+        s_pitch_recapture = false;
+        s_pitch_d0 = d;
+        s_pitch_z0 = z;
+        pitch_release();
+        return;
+    }
+
+    /* 2-D cross product of (d, z) against the neutral pair: proportional
+     * to sin(pitch deviation), independent of how reclined the neutral
+     * pose is. Positive = tilted back relative to neutral. */
+    cross = z * s_pitch_d0 - d * s_pitch_z0;
+
+    if (s_pitch_move == 0) {
+        if (cross < -PITCH_PRESS_X) {
+            want = 1;                /* tilted forward → move forward */
+        } else if (cross > PITCH_PRESS_X) {
+            want = -1;               /* tilted back → move back */
+        }
+    } else if (s_pitch_move > 0) {
+        if (cross > -PITCH_RELEASE_X) {
+            want = 0;
+        }
+    } else {
+        if (cross < PITCH_RELEASE_X) {
+            want = 0;
+        }
+    }
+
+    if (want != s_pitch_move) {
+        pitch_release();
+        if (want > 0) {
+            bao_input_queue_key(1, KEY_UPARROW);
+        } else if (want < 0) {
+            bao_input_queue_key(1, KEY_DOWNARROW);
+        }
+        s_pitch_move = want;
+    }
+}
+
+void bao_accel_pitch_toggle(void)
+{
+    if (!s_ok) {
+        mini_printf("accel: pitch toggle ignored (no accel)\r\n");
+        return;
+    }
+    if (s_pitch_enabled) {
+        s_pitch_enabled = false;
+        s_pitch_recapture = false;
+        pitch_release();
+        mini_printf("accel: pitch control off\r\n");
+    } else {
+        /* Neutral is re-learned from the next sample every time pitch
+         * control is enabled. */
+        s_pitch_enabled = true;
+        s_pitch_recapture = true;
+        mini_printf("accel: pitch control on\r\n");
+    }
+}
 
 void bao_accel_init(void)
 {
@@ -244,6 +372,7 @@ void bao_accel_poll(void)
 #ifdef BAO_ACCEL_STRAFE
     strafe_update(mg, now);
 #endif
+    pitch_update(mg, now);
 }
 
 #endif /* BAO_ACCEL_STRAFE || BAO_ACCEL_ORIENT */

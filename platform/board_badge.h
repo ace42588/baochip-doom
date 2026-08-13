@@ -71,6 +71,10 @@
 #define BOARD_ACCEL_DOWN_AXIS    0
 #define BOARD_ACCEL_DOWN_SIGN    1
 #define BOARD_ACCEL_PORTRAIT_DIR (-1)
+/* Sign of the remaining (panel-normal) axis for pitch-to-move: chosen so
+ * tilting the badge back (face up) reads positive. Flip if pitch movement
+ * is reversed. */
+#define BOARD_ACCEL_PITCH_SIGN   1
 
 #define BOARD_W25Q_INSTANCE     1
 #define BOARD_W25Q_CS           0

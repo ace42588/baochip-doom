@@ -11,9 +11,15 @@ void bao_accel_init(void);
 /* Sample gravity and update strafe keys / orientation. Rate-limited
  * internally; cheap to call from every input poll. */
 void bao_accel_poll(void);
+
+/* Toggle pitch-to-move (forward/back from tilt). Off by default; each
+ * enable re-captures the current pose as the neutral position. Wired to
+ * a keypad chord in bao_input.c. */
+void bao_accel_pitch_toggle(void);
 #else
 static inline void bao_accel_init(void) {}
 static inline void bao_accel_poll(void) {}
+static inline void bao_accel_pitch_toggle(void) {}
 #endif
 
 /*
